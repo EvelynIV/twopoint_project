@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from decimal import Decimal, ROUND_HALF_UP
+from dataclasses import dataclass
 from enum import IntEnum
 
 
 FRAME_HEAD = 0x7A
 FRAME_TAIL = 0x7B
+FEEDBACK_FRAME_LENGTH = 9
 
 
 class Command(IntEnum):
@@ -37,6 +39,22 @@ class FeedbackType(IntEnum):
     MECHANICAL_ANGLE = 0x02
     ACCELERATION = 0x03
     BUS_VOLTAGE = 0x04
+
+
+@dataclass(frozen=True)
+class FeedbackFrame:
+    motor_id: int
+    feedback_type: FeedbackType
+    raw_value: int
+
+    @property
+    def angle_deg(self) -> float:
+        if self.feedback_type not in {
+            FeedbackType.MULTI_TURN_ANGLE,
+            FeedbackType.MECHANICAL_ANGLE,
+        }:
+            raise ValueError(f"feedback type {self.feedback_type.name} is not an angle")
+        return self.raw_value / 10.0
 
 
 def checksum(payload: bytes) -> int:
@@ -85,6 +103,40 @@ def build_multi_turn_angle(motor_id: int, angle_deg: float) -> bytes:
 def build_request_feedback(motor_id: int, feedback_type: int | FeedbackType) -> bytes:
     _validate_byte("feedback_type", int(feedback_type))
     return build_frame(motor_id, Command.REQUEST_FEEDBACK, bytes((int(feedback_type),)))
+
+
+def parse_feedback_frame(
+    frame: bytes,
+    *,
+    expected_motor_id: int | None = None,
+    expected_type: FeedbackType | None = None,
+) -> FeedbackFrame:
+    if len(frame) != FEEDBACK_FRAME_LENGTH:
+        raise ValueError(
+            f"feedback frame must be {FEEDBACK_FRAME_LENGTH} bytes, got {len(frame)}"
+        )
+    if frame[0] != FRAME_HEAD or frame[-1] != FRAME_TAIL:
+        raise ValueError("invalid feedback frame markers")
+    if checksum(frame[:-2]) != frame[-2]:
+        raise ValueError("invalid feedback frame checksum")
+    motor_id = int(frame[1])
+    if expected_motor_id is not None and motor_id != expected_motor_id:
+        raise ValueError(
+            f"feedback motor id mismatch: expected {expected_motor_id}, got {motor_id}"
+        )
+    try:
+        feedback_type = FeedbackType(frame[2])
+    except ValueError as exc:
+        raise ValueError(f"unknown feedback type: 0x{frame[2]:02X}") from exc
+    if expected_type is not None and feedback_type != expected_type:
+        raise ValueError(
+            f"feedback type mismatch: expected {expected_type.name}, got {feedback_type.name}"
+        )
+    return FeedbackFrame(
+        motor_id=motor_id,
+        feedback_type=feedback_type,
+        raw_value=int.from_bytes(frame[3:7], "big", signed=True),
+    )
 
 
 def angle_to_tenths(angle_deg: float) -> int:

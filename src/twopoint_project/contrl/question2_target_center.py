@@ -4,7 +4,6 @@ import time
 from typing import Any
 
 from twopoint_project.contrl.target_center_servo import (
-    DEFAULT_CONTROL_CONF_THRESHOLD,
     TargetCenterServo,
     sleep_for_loop_rate,
 )
@@ -43,7 +42,6 @@ def run(args: Any) -> bool:
         y_gain_deg=args.y_gain_deg,
         max_step_deg=args.max_step_deg,
         deadband=args.deadband,
-        conf_threshold=getattr(args, "conf_threshold", DEFAULT_CONTROL_CONF_THRESHOLD),
     )
 
     deadline = time.monotonic() + args.timeout

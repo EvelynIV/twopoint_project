@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -15,11 +16,14 @@ from twopoint_project.config import (
     CenterThenFlashConfig,
     F32CConfig,
     LaserConfig,
+    RecordingConfig,
     RuntimeConfig,
     VisionConfig,
     WebRtcConfig,
 )
-from twopoint_project.contrl import center_then_flash
+from twopoint_project.f32c.gimbal import GimbalAngles
+from twopoint_project.vision.inferencer import VisionInferenceDetails
+from twopoint_project.vision3.laser_area_mapping import predict_laser_point_from_normalized_area
 
 
 class FakeCapture:
@@ -33,7 +37,7 @@ class FakeCapture:
     def __exit__(self, *args: object) -> None:
         self.closed = True
 
-    def read_frame(self) -> object:
+    def read_frame(self, timeout: float | None = None) -> object:
         return self.frame
 
 
@@ -42,6 +46,8 @@ class FakeGimbal:
         self.initialized = False
         self.disabled = False
         self.moves: list[tuple[float, float]] = []
+        self.x_angle = 0.0
+        self.y_angle = 0.0
 
     def __enter__(self) -> FakeGimbal:
         return self
@@ -54,6 +60,26 @@ class FakeGimbal:
 
     def move_by(self, x_delta_deg: float, y_delta_deg: float) -> None:
         self.moves.append((x_delta_deg, y_delta_deg))
+
+    def move_to(self, x_angle_deg: float, y_angle_deg: float) -> None:
+        self.x_angle = x_angle_deg
+        self.y_angle = y_angle_deg
+        self.moves.append((x_angle_deg, y_angle_deg))
+
+    def read_angles(self, timeout: float = 0.01) -> GimbalAngles:
+        return GimbalAngles(self.x_angle, self.y_angle, time.monotonic_ns())
+
+    def commanded_angles(self) -> GimbalAngles:
+        return GimbalAngles(
+            self.x_angle,
+            self.y_angle,
+            time.monotonic_ns(),
+            feedback_valid=False,
+        )
+
+    def sync_commanded_angles(self, angles: GimbalAngles) -> None:
+        self.x_angle = angles.x_deg
+        self.y_angle = angles.y_deg
 
     def disable(self) -> None:
         self.disabled = True
@@ -85,10 +111,60 @@ class FakeInferencer:
         return [{"label": "target_center", "x": 0.5, "y": 0.5, "confidence": 1.0}]
 
 
+class FakeDistanceInferencer(FakeInferencer):
+    def predict_with_details(self, frame_bgr: np.ndarray) -> VisionInferenceDetails:
+        height, width = frame_bgr.shape[:2]
+        area = 0.02
+        laser = predict_laser_point_from_normalized_area(
+            area,
+            frame_width=width,
+            frame_height=height,
+        )
+        assert laser is not None
+        return VisionInferenceDetails(
+            points=[
+                {
+                    "label": "target_center",
+                    "x": laser.x,
+                    "y": laser.y,
+                    "confidence": 1.0,
+                }
+            ],
+            target_area_normalized=area,
+            target_distance_cm=142.0,
+        )
+
+
+class FakeVisionFrames:
+    def __init__(self, frames: list[object]) -> None:
+        self.frames = list(frames)
+
+    def read_nowait_latest(self) -> object | None:
+        if not self.frames:
+            return None
+        return self.frames.pop(0)
+
+
+class FakeVideoRecorder:
+    instances: list[FakeVideoRecorder] = []
+
+    def __init__(self, output_path: Path, fps: float, label: str) -> None:
+        self.output_path = output_path
+        self.fps = fps
+        self.label = label
+        self.frames: list[object] = []
+        FakeVideoRecorder.instances.append(self)
+
+    def write(self, frame_bgr: object) -> None:
+        self.frames.append(frame_bgr)
+
+    def close(self) -> None:
+        pass
+
+
 def make_task_config() -> CenterThenFlashConfig:
     return CenterThenFlashConfig(
         mode="center_then_flash",
-        camera=CameraConfig(index=0, width=640, height=480, fps=30),
         f32c=F32CConfig(
             port="/dev/null",
             baudrate=115200,
@@ -101,7 +177,6 @@ def make_task_config() -> CenterThenFlashConfig:
             debug_frames=False,
         ),
         center=CenterConfig(
-            conf_threshold=0.5,
             target_x=0.5,
             target_y=0.5,
             x_gain_deg=8.0,
@@ -114,12 +189,14 @@ def make_task_config() -> CenterThenFlashConfig:
         ),
         laser=LaserConfig(hold_seconds=0),
         behavior=BehaviorConfig(fire_after_timeout=True, exit_after_fire=True),
+        recording=RecordingConfig(),
     )
 
 
 def make_runtime_config() -> RuntimeConfig:
     return RuntimeConfig(
         config_path=Path("unused.json"),
+        camera=CameraConfig(width=1280, height=720, fps=30),
         vision=VisionConfig(
             backend="traditional",
             onnx_path="model-bin/runs/twopoint/best.onnx",
@@ -132,7 +209,6 @@ def make_runtime_config() -> RuntimeConfig:
 def make_track_config() -> CenterFlashTrackConfig:
     return CenterFlashTrackConfig(
         mode="center_flash_track",
-        camera=CameraConfig(index=0, width=640, height=480, fps=30),
         f32c=F32CConfig(
             port="/dev/null",
             baudrate=115200,
@@ -145,7 +221,6 @@ def make_track_config() -> CenterFlashTrackConfig:
             debug_frames=False,
         ),
         center=CenterConfig(
-            conf_threshold=0.5,
             target_x=0.5,
             target_y=0.5,
             x_gain_deg=8.0,
@@ -158,6 +233,19 @@ def make_track_config() -> CenterFlashTrackConfig:
         ),
         laser=LaserConfig(hold_seconds=0),
         behavior=BehaviorConfig(fire_after_timeout=True, exit_after_fire=False),
+        recording=RecordingConfig(),
+    )
+
+
+def make_constant_laser_track_config() -> CenterFlashTrackConfig:
+    task_config = make_track_config()
+    return CenterFlashTrackConfig(
+        mode=task_config.mode,
+        f32c=task_config.f32c,
+        center=task_config.center,
+        laser=LaserConfig(hold_seconds=0, on_during_run=True),
+        behavior=task_config.behavior,
+        recording=task_config.recording,
     )
 
 
@@ -171,67 +259,18 @@ class StopAfterCalls:
         return self.calls >= self.limit
 
 
-class CenterThenFlashTest(unittest.TestCase):
-    def test_run_centers_then_turns_laser_on_and_disables_gimbal(self) -> None:
-        fake_gimbal = FakeGimbal()
-        fake_laser = FakeLaser()
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.sleeps: list[float] = []
 
-        with patch.object(center_then_flash, "open_camera_capture", return_value=FakeCapture()), patch.object(
-            center_then_flash,
-            "open_serial_gimbal",
-            return_value=fake_gimbal,
-        ) as open_serial_gimbal, patch.object(
-            center_then_flash,
-            "open_laser_pointer",
-            return_value=fake_laser,
-        ), patch.object(
-            center_then_flash,
-            "build_vision_inferencer",
-            return_value=FakeInferencer(),
-        ) as build_vision_inferencer:
-            result = center_then_flash.run(make_task_config(), make_runtime_config())
+    def __call__(self) -> float:
+        return self.now
 
-        self.assertTrue(result)
-        build_vision_inferencer.assert_called_once_with(
-            backend="traditional",
-            onnx_path="model-bin/runs/twopoint/best.onnx",
-            img_size=640,
-        )
-        open_serial_gimbal.assert_called_once()
-        self.assertNotIn("init_zero", open_serial_gimbal.call_args.kwargs)
-        self.assertTrue(fake_gimbal.initialized)
-        self.assertTrue(fake_gimbal.disabled)
-        self.assertEqual(fake_gimbal.moves, [])
-        self.assertIn("on", fake_laser.events)
-        self.assertEqual(fake_laser.events[-1], "off")
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
 
-    def test_track_mode_fires_then_keeps_aiming_until_stop_requested(self) -> None:
-        fake_gimbal = FakeGimbal()
-        fake_laser = FakeLaser()
-        stop_requested = StopAfterCalls(3)
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
 
-        with patch.object(center_then_flash, "open_camera_capture", return_value=FakeCapture()), patch.object(
-            center_then_flash,
-            "open_serial_gimbal",
-            return_value=fake_gimbal,
-        ), patch.object(
-            center_then_flash,
-            "open_laser_pointer",
-            return_value=fake_laser,
-        ), patch.object(
-            center_then_flash,
-            "build_vision_inferencer",
-            return_value=FakeInferencer(),
-        ):
-            result = center_then_flash.run_track(make_track_config(), make_runtime_config(), stop_requested)
-
-        self.assertTrue(result)
-        self.assertGreaterEqual(stop_requested.calls, 3)
-        self.assertTrue(fake_gimbal.initialized)
-        self.assertTrue(fake_gimbal.disabled)
-        self.assertIn("on", fake_laser.events)
-        self.assertEqual(fake_laser.events[-1], "off")
-
-
-if __name__ == "__main__":
-    unittest.main()

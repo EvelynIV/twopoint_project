@@ -34,6 +34,39 @@ class F32CProtocolTest(unittest.TestCase):
         self.assertEqual(protocol.build_set_multi_turn_passthrough(2)[-2], protocol.FRAME_TAIL)
         self.assertEqual(protocol.build_set_multi_turn_passthrough(2), bytes.fromhex("7A 02 00 00 03 7B 7B"))
 
+    def test_multi_turn_feedback_request_and_response(self) -> None:
+        self.assertEqual(
+            protocol.build_request_feedback(1, protocol.FeedbackType.MULTI_TURN_ANGLE),
+            bytes.fromhex("7A 01 0E 01 74 7B"),
+        )
+        response = protocol.build_frame(
+            1,
+            protocol.FeedbackType.MULTI_TURN_ANGLE,
+            (-123).to_bytes(4, "big", signed=True),
+        )
+
+        parsed = protocol.parse_feedback_frame(
+            response,
+            expected_motor_id=1,
+            expected_type=protocol.FeedbackType.MULTI_TURN_ANGLE,
+        )
+
+        self.assertEqual(parsed.raw_value, -123)
+        self.assertEqual(parsed.angle_deg, -12.3)
+
+    def test_feedback_parser_rejects_bad_checksum(self) -> None:
+        response = bytearray(
+            protocol.build_frame(
+                2,
+                protocol.FeedbackType.MULTI_TURN_ANGLE,
+                (100).to_bytes(4, "big", signed=True),
+            )
+        )
+        response[-2] ^= 0x01
+
+        with self.assertRaisesRegex(ValueError, "checksum"):
+            protocol.parse_feedback_frame(bytes(response))
+
 
 if __name__ == "__main__":
     unittest.main()

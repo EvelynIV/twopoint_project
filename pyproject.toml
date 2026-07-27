@@ -6,10 +6,12 @@ authors = [
     {name = "wcy",email = "wcy@gmail.com"}
 ]
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<4"
 dependencies = [
 
     "opencv-python-headless (>=4.13.0.92,<5.0.0.0)",
+
+    "pygobject (==3.48.2)",
 
     "onnxruntime (==1.20.1)",
 

@@ -28,18 +28,10 @@ from aiortc.rtcconfiguration import RTCConfiguration
 from av import VideoFrame
 
 from tests.draw import NoopGimbal, draw_aim_frame
-from twopoint_project.contrl.center_then_flash import (
-    env_float,
-    env_int,
-    env_str,
-    load_dotenv as load_project_dotenv,
-    open_camera_capture,
-)
-from twopoint_project.contrl.target_center_servo import (
-    AimUpdate,
-    TargetCenterServo,
-    control_conf_threshold,
-)
+from dotenv import load_dotenv as load_project_dotenv
+from twopoint_project.config import env_float, env_int, env_str
+from twopoint_project.contrl.target_center_servo import AimUpdate, TargetCenterServo
+from twopoint_project.tasks.resources import open_camera_capture
 from twopoint_project.vision.inferencer import DEFAULT_IMG_SIZE, build_vision_inferencer
 from twopoint_project.vision.pipeline import VisionProducer
 
@@ -292,7 +284,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-step-deg", type=float, default=env_float("CENTER_MAX_STEP_DEG", 1.0))
     parser.add_argument("--deadband", type=float, default=env_float("CENTER_DEADBAND", 0.006))
     args = parser.parse_args()
-    control_conf_threshold()
     return args
 
 
@@ -374,7 +365,8 @@ class DemoResources:
             vision_frame.captured.frame_bgr,
             vision_frame.points,
             update,
-            control_conf_threshold(),
+            vision_frame.target_corners_normalized,
+            vision_frame.raw_target_center,
         )
         return annotated, self.status_for(vision_frame, update)
 
@@ -389,7 +381,7 @@ class DemoResources:
             "camera_error": self.camera_error,
             "frame_id": captured.frame_id,
             "timestamp": captured.timestamp,
-            "age_ms": round((time.time() - captured.timestamp) * 1000.0, 1),
+            "age_ms": round((time.monotonic() - captured.timestamp) * 1000.0, 1),
             "points": vision_frame.points,
             "valid": update.valid,
             "moved": update.moved,

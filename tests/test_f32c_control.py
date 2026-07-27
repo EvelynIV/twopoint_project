@@ -23,6 +23,20 @@ class FakeSerial:
         self.closed = True
 
 
+class FakeFeedbackSerial(FakeSerial):
+    def __init__(self, response: bytes) -> None:
+        super().__init__()
+        self.response = bytearray(response)
+
+    def reset_input_buffer(self) -> None:
+        pass
+
+    def read(self, size: int = 1) -> bytes:
+        chunk = bytes(self.response[:size])
+        del self.response[:size]
+        return chunk
+
+
 class F32CMotorTest(unittest.TestCase):
     def test_move_by_accumulates_target_angle(self) -> None:
         serial_port = FakeSerial()
@@ -34,6 +48,23 @@ class F32CMotorTest(unittest.TestCase):
         self.assertEqual(motor.target_angle_deg, 15)
         self.assertEqual(serial_port.writes[0], protocol.build_multi_turn_angle(1, 10))
         self.assertEqual(serial_port.writes[1], protocol.build_multi_turn_angle(1, 15))
+
+    def test_read_multi_turn_angle_returns_encoder_feedback(self) -> None:
+        response = protocol.build_frame(
+            1,
+            protocol.FeedbackType.MULTI_TURN_ANGLE,
+            (123).to_bytes(4, "big", signed=True),
+        )
+        serial_port = FakeFeedbackSerial(response)
+        motor = F32CMotor(serial_port, 1, command_interval=0)
+
+        angle = motor.read_multi_turn_angle(timeout=0.01)
+
+        self.assertEqual(angle, 12.3)
+        self.assertEqual(
+            serial_port.writes,
+            [protocol.build_request_feedback(1, protocol.FeedbackType.MULTI_TURN_ANGLE)],
+        )
 
 class F32CGimbalTest(unittest.TestCase):
     def test_initialize_order(self) -> None:

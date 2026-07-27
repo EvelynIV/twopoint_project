@@ -10,6 +10,9 @@ class SerialLike(Protocol):
     def write(self, data: bytes) -> int | None:
         ...
 
+    def read(self, size: int = 1) -> bytes:
+        ...
+
 
 class F32CMotor:
     def __init__(
@@ -44,6 +47,57 @@ class F32CMotor:
 
     def move_by_angle(self, delta_deg: float) -> None:
         self.move_to_angle(self.target_angle_deg + float(delta_deg))
+
+    def read_multi_turn_angle(self, timeout: float = 0.01) -> float:
+        if timeout <= 0:
+            raise ValueError("feedback timeout must be greater than 0")
+        reset_input_buffer = getattr(self.serial_port, "reset_input_buffer", None)
+        if callable(reset_input_buffer):
+            reset_input_buffer()
+        self._send(
+            protocol.build_request_feedback(
+                self.motor_id,
+                protocol.FeedbackType.MULTI_TURN_ANGLE,
+            )
+        )
+        deadline = time.monotonic() + timeout
+        buffer = bytearray()
+        while time.monotonic() < deadline:
+            chunk = self.serial_port.read(protocol.FEEDBACK_FRAME_LENGTH)
+            if chunk:
+                buffer.extend(chunk)
+                frame = self._extract_feedback_frame(buffer)
+                if frame is not None:
+                    return protocol.parse_feedback_frame(
+                        frame,
+                        expected_motor_id=self.motor_id,
+                        expected_type=protocol.FeedbackType.MULTI_TURN_ANGLE,
+                    ).angle_deg
+            else:
+                time.sleep(0.001)
+        raise TimeoutError(f"timed out reading multi-turn angle from motor {self.motor_id}")
+
+    @staticmethod
+    def _extract_feedback_frame(buffer: bytearray) -> bytes | None:
+        while buffer:
+            try:
+                head_index = buffer.index(protocol.FRAME_HEAD)
+            except ValueError:
+                buffer.clear()
+                return None
+            if head_index:
+                del buffer[:head_index]
+            if len(buffer) < protocol.FEEDBACK_FRAME_LENGTH:
+                return None
+            candidate = bytes(buffer[: protocol.FEEDBACK_FRAME_LENGTH])
+            try:
+                protocol.parse_feedback_frame(candidate)
+            except ValueError:
+                del buffer[0]
+                continue
+            del buffer[: protocol.FEEDBACK_FRAME_LENGTH]
+            return candidate
+        return None
 
     def _send(self, frame: bytes) -> None:
         if self.debug_frames:

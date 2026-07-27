@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import errno
+from dataclasses import dataclass
 import time
 from types import TracebackType
 from typing import Type
@@ -12,13 +13,21 @@ DEFAULT_SERIAL_PORT = "/dev/ttyAS4"
 DEFAULT_BAUDRATE = 115200
 DEFAULT_X_ID = 1
 DEFAULT_Y_ID = 2
-DEFAULT_SPEED_RPM = 100
+DEFAULT_SPEED_RPM = 50
 DEFAULT_STARTUP_DELAY = 0.3
 DEFAULT_COMMAND_INTERVAL = 0.001
 DEFAULT_ENABLE_SETTLE_DELAY = 0.2
 A7A_UART_PORT_NAME = "UART4"
 A7A_UART_TX_PIN = 16
 A7A_UART_RX_PIN = 18
+
+
+@dataclass(frozen=True)
+class GimbalAngles:
+    x_deg: float
+    y_deg: float
+    sampled_at_monotonic_ns: int
+    feedback_valid: bool = True
 
 
 class F32CGimbal:
@@ -83,6 +92,29 @@ class F32CGimbal:
         self.x.move_to_angle(x_angle_deg)
         self.y.move_to_angle(y_angle_deg)
 
+    def read_angles(self, timeout: float = 0.01) -> GimbalAngles:
+        started = time.monotonic_ns()
+        x_deg = self.x.read_multi_turn_angle(timeout=timeout)
+        y_deg = self.y.read_multi_turn_angle(timeout=timeout)
+        finished = time.monotonic_ns()
+        return GimbalAngles(
+            x_deg=x_deg,
+            y_deg=y_deg,
+            sampled_at_monotonic_ns=(started + finished) // 2,
+        )
+
+    def commanded_angles(self) -> GimbalAngles:
+        return GimbalAngles(
+            x_deg=self.x.target_angle_deg,
+            y_deg=self.y.target_angle_deg,
+            sampled_at_monotonic_ns=time.monotonic_ns(),
+            feedback_valid=False,
+        )
+
+    def sync_commanded_angles(self, angles: GimbalAngles) -> None:
+        self.x.target_angle_deg = float(angles.x_deg)
+        self.y.target_angle_deg = float(angles.y_deg)
+
     def disable(self) -> None:
         self.x.disable()
         self.y.disable()
@@ -117,7 +149,7 @@ def open_serial_gimbal(
             bytesize=serial.EIGHTBITS,
             parity=serial.PARITY_NONE,
             stopbits=serial.STOPBITS_ONE,
-            timeout=0.1,
+            timeout=0.001,
             write_timeout=1.0,
         )
     except serial.SerialException as exc:

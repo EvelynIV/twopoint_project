@@ -247,14 +247,13 @@ def draw_label(image: np.ndarray, text: str, origin: tuple[int, int], color: tup
 def draw_predictions(
     image_bgr: np.ndarray,
     points: dict[str, dict[str, float]],
-    conf_threshold: float,
     radius: int,
 ) -> np.ndarray:
     annotated = image_bgr.copy()
 
     for name in POINT_NAMES:
         point = points[name]
-        if point["confidence"] < conf_threshold:
+        if point["confidence"] <= 0.0:
             continue
 
         x = int(round(point["x"]))

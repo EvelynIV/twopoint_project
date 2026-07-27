@@ -1,11 +1,5 @@
 {
   "mode": "center_flash_track",
-  "camera": {
-    "index": 0,
-    "width": 640,
-    "height": 480,
-    "fps": 30
-  },
   "f32c": {
     "port": "/dev/ttyAS4",
     "baudrate": 115200,
@@ -18,35 +12,58 @@
     "debug_frames": false
   },
   "center": {
-    "conf_threshold": 0.0,
-    "target_x": 0.5,
-    "target_y": 0.5,
-    "pid": {
-      "x": {
-        "kp": -12.0,
-        "ki": 0.0,
-        "kd": 0.0,
-        "integral_limit": 0.2,
-        "output_limit_deg": 1.0
-      },
-      "y": {
-        "kp": 12.0,
-        "ki": 0.0,
-        "kd": 0.0,
-        "integral_limit": 0.2,
-        "output_limit_deg": 1.0
-      }
-    },
     "deadband": 0.006,
     "loop_hz": 15.0,
     "timeout": 100.0,
-    "stable_frames": 3
+    "stable_frames": 3,
+    "target_filter": {
+      "enabled": true,
+      "ema_alpha": 0.4,
+      "max_jump": 0.08,
+      "jump_confirm_frames": 2
+    }
+  },
+  "closed_loop": {
+    "motor_loop_hz": 50.0,
+    "feedback_timeout": 0.01,
+    "max_vision_age_seconds": 0.3,
+    "angle_deadband_deg": 0.1,
+    "x_angle_gain_deg": 25.0,
+    "y_angle_gain_deg": -25.0,
+    "max_visual_correction_deg": 20.0,
+    "feedforward": {
+      "enabled": true,
+      "lead_time": 0.03,
+      "max_prediction_error": 0.04,
+      "max_velocity": 2.0,
+      "velocity_alpha": 0.35
+    },
+    "pid": {
+      "x": {
+        "kp": 1.0,
+        "ki": 0.05,
+        "kd": 0.1,
+        "integral_limit": 0.5,
+        "output_limit_deg": 2.0
+      },
+      "y": {
+        "kp": 1.0,
+        "ki": 0.05,
+        "kd": 0.1,
+        "integral_limit": 0.5,
+        "output_limit_deg": 2.0
+      }
+    }
   },
   "laser": {
-    "hold_seconds": 5.0
+    "hold_seconds": 5.0,
+    "on_during_run": true
   },
   "behavior": {
     "fire_after_timeout": true,
     "exit_after_fire": false
+  },
+  "recording": {
+    "save_raw_video": true
   }
 }
